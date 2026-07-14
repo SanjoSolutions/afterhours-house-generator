@@ -91,7 +91,7 @@
     stab.connect(delay);
     const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
 
-    return { master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, kick, clap, hat, openHat, perc, bass, chords, stab, noise, scene: null, step: 0, bar: 0, chordIndex: 0, transition: false, loopId: null };
+    return { master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, kick, clap, hat, openHat, perc, bass, chords, stab, noise, scene: null, pendingScene: null, transitionStep: -1, step: 0, bar: 0, chordIndex: 0, transition: false, loopId: null };
   }
 
   function sceneChord(scene, degree, octave = 60) {
@@ -100,23 +100,30 @@
     return chordTypes[scene.chordType].map(n => midiNote(base + n));
   }
 
-  function applyScene(scene, first = false) {
+  function ramp(parameter, value, duration, time) {
+    if (time === undefined) parameter.rampTo(value, duration);
+    else parameter.rampTo(value, duration, time);
+  }
+
+  function applyScene(scene, first = false, time) {
     const e = engine;
     e.scene = scene;
     Tone.Transport.swing = scene.swing;
-    Tone.Transport.bpm.rampTo(scene.bpm, first ? .1 : 8);
-    e.bassFilter.frequency.rampTo(260 + scene.energy * 1050 + (scene.flavor === "acid" ? 800 : 0), first ? .1 : 6);
-    e.musicFilter.frequency.rampTo(900 + scene.brightness * 4600, first ? .1 : 7);
-    e.drumBus.volume.rampTo(-7 + scene.energy * 6, 5);
-    e.bassBus.volume.rampTo(-11 + scene.energy * 6, 5);
-    e.musicBus.volume.rampTo(-17 + scene.energy * 8, 7);
-    e.reverb.wet.rampTo(scene.room, first ? .1 : 8);
+    ramp(Tone.Transport.bpm, scene.bpm, first ? .1 : 8, time);
+    ramp(e.bassFilter.frequency, 260 + scene.energy * 1050 + (scene.flavor === "acid" ? 800 : 0), first ? .1 : 6, time);
+    ramp(e.musicFilter.frequency, 900 + scene.brightness * 4600, first ? .1 : 7, time);
+    ramp(e.drumBus.volume, -7 + scene.energy * 6, 5, time);
+    ramp(e.bassBus.volume, -11 + scene.energy * 6, 5, time);
+    ramp(e.musicBus.volume, -17 + scene.energy * 8, 7, time);
+    ramp(e.reverb.wet, scene.room, first ? .1 : 8, time);
     updateMeta();
   }
 
   function schedule() {
     engine.loopId = Tone.Transport.scheduleRepeat((time) => {
-      const e = engine, s = e.scene, step = e.step % 16;
+      const e = engine;
+      if (e.transition && e.step === e.transitionStep) completeTransition(time);
+      const s = e.scene, step = e.step % 16;
       const beat = Math.floor(step / 4), bar = e.bar;
       const energy = s.energy;
 
@@ -159,16 +166,21 @@
     const e = engine;
     e.transition = true;
     const next = makeScene();
-    e.musicFilter.frequency.rampTo(420, 3.5);
-    e.bassBus.volume.rampTo(-22, 3.2);
+    e.pendingScene = next;
+    e.transitionStep = e.step + 16;
+    ramp(e.musicFilter.frequency, 420, 3.5, time);
+    ramp(e.bassBus.volume, -22, 3.2, time);
     Tone.Draw.schedule(() => showToast("MIXING INTO " + next.name.toUpperCase()), time);
-    Tone.Transport.scheduleOnce((t) => {
-      e.bar = 0; e.chordIndex = 0;
-      applyScene(next);
-      e.bassBus.volume.rampTo(-11 + next.energy * 6, 5);
-      e.noise.triggerAttackRelease("1m", t, .16);
-      e.transition = false;
-    }, "+1m");
+  }
+
+  function completeTransition(time) {
+    const e = engine, next = e.pendingScene;
+    e.bar = 0; e.chordIndex = 0;
+    applyScene(next, false, time);
+    e.noise.triggerAttackRelease("1m", time, .16);
+    e.pendingScene = null;
+    e.transitionStep = -1;
+    e.transition = false;
   }
 
   async function start() {
@@ -215,7 +227,12 @@
   const ctx = ui.canvas.getContext("2d");
   function draw() {
     const c = ui.canvas, rect = c.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);
-    if (c.width !== rect.width * dpr || c.height !== rect.height * dpr) { c.width = rect.width * dpr; c.height = rect.height * dpr; }
+    // Canvas dimensions are integers. Comparing them with fractional CSS pixel
+    // values caused the backing store to be reallocated on every frame at many
+    // Windows display scales, eventually making the page appear frozen.
+    const pixelWidth = Math.max(1, Math.round(rect.width * dpr));
+    const pixelHeight = Math.max(1, Math.round(rect.height * dpr));
+    if (c.width !== pixelWidth || c.height !== pixelHeight) { c.width = pixelWidth; c.height = pixelHeight; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
     const values = engine?.analyser ? engine.analyser.getValue() : new Float32Array(96).fill(-100);
