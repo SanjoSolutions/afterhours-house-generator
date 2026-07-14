@@ -20,6 +20,7 @@
   const semis = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, Bb: 10 };
   const minor = [0, 2, 3, 5, 7, 8, 10];
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
+  const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "noise"];
   let engine = null, running = false, raf = 0, toastTimer;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
 
@@ -54,15 +55,27 @@
     };
   }
 
-  function buildEngine() {
-    Tone.Transport.PPQ = 192;
-    Tone.Transport.swingSubdivision = "16n";
+  function createVoices(drumBus, bassBus, musicBus, delay, reverb) {
+    const kick = new Tone.MembraneSynth({ pitchDecay: .025, octaves: 6, oscillator: { type: "sine" }, envelope: { attack: .001, decay: .28, sustain: .01, release: .12 } }).connect(drumBus);
+    const clapFilter = new Tone.Filter(1800, "highpass").connect(drumBus);
+    const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, envelope: { attack: .001, decay: .11, sustain: 0 } }).connect(clapFilter);
+    const hat = new Tone.MetalSynth({ frequency: 220, envelope: { attack: .001, decay: .055, release: .01 }, harmonicity: 5.1, modulationIndex: 24, resonance: 3100, octaves: 1.3, volume: -14 }).connect(drumBus);
+    const openHat = new Tone.MetalSynth({ frequency: 185, envelope: { attack: .001, decay: .24, release: .04 }, harmonicity: 5.1, modulationIndex: 20, resonance: 2800, octaves: 1.2, volume: -17 }).connect(drumBus);
+    const perc = new Tone.MembraneSynth({ pitchDecay: .008, octaves: 2, envelope: { attack: .001, decay: .09, sustain: 0, release: .03 }, volume: -13 }).connect(drumBus);
+    const bass = new Tone.MonoSynth({ oscillator: { type: "square" }, filter: { Q: 2, type: "lowpass", rolloff: -24 }, envelope: { attack: .008, decay: .15, sustain: .18, release: .09 }, filterEnvelope: { attack: .005, decay: .16, sustain: .2, release: .1, baseFrequency: 80, octaves: 2.8 }, volume: -3 }).connect(bassBus);
+    const chords = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8 }).connect(musicBus);
+    const stab = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sawtooth" }, envelope: { attack: .006, decay: .08, sustain: 0, release: .16 }, volume: -13 }).connect(musicBus);
+    stab.connect(delay);
+    const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
+    return { kick, clapFilter, clap, hat, openHat, perc, bass, chords, stab, noise };
+  }
 
+  function buildEngine() {
     const master = new Tone.Gain(0.78);
     const lowCut = new Tone.Filter(28, "highpass");
     const compressor = new Tone.Compressor({ threshold: -16, ratio: 3, attack: .02, release: .22, knee: 12 });
     const limiter = new Tone.Limiter(-1);
-    master.chain(lowCut, compressor, limiter, Tone.Destination);
+    master.chain(lowCut, compressor, limiter, Tone.getDestination());
     const analyser = new Tone.Analyser("fft", 64);
     master.connect(analyser);
 
@@ -75,23 +88,18 @@
     musicFilter.connect(master);
 
     const reverb = new Tone.Reverb({ decay: 3.2, preDelay: .035, wet: .28 }).connect(master);
-    const delay = new Tone.PingPongDelay("8n.", .28).connect(reverb);
+    const delay = new Tone.PingPongDelay(.375, .28).connect(reverb);
     const send = new Tone.Gain(.18).connect(reverb);
     musicBus.connect(send);
+    const voices = createVoices(drumBus, bassBus, musicBus, delay, reverb);
 
-    const kick = new Tone.MembraneSynth({ pitchDecay: .025, octaves: 6, oscillator: { type: "sine" }, envelope: { attack: .001, decay: .28, sustain: .01, release: .12 } }).connect(drumBus);
-    const clapFilter = new Tone.Filter(1800, "highpass").connect(drumBus);
-    const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, envelope: { attack: .001, decay: .11, sustain: 0 } }).connect(clapFilter);
-    const hat = new Tone.MetalSynth({ frequency: 220, envelope: { attack: .001, decay: .055, release: .01 }, harmonicity: 5.1, modulationIndex: 24, resonance: 3100, octaves: 1.3, volume: -14 }).connect(drumBus);
-    const openHat = new Tone.MetalSynth({ frequency: 185, envelope: { attack: .001, decay: .24, release: .04 }, harmonicity: 5.1, modulationIndex: 20, resonance: 2800, octaves: 1.2, volume: -17 }).connect(drumBus);
-    const perc = new Tone.MembraneSynth({ pitchDecay: .008, octaves: 2, envelope: { attack: .001, decay: .09, sustain: 0, release: .03 }, volume: -13 }).connect(drumBus);
-    const bass = new Tone.MonoSynth({ oscillator: { type: "square" }, filter: { Q: 2, type: "lowpass", rolloff: -24 }, envelope: { attack: .008, decay: .15, sustain: .18, release: .09 }, filterEnvelope: { attack: .005, decay: .16, sustain: .2, release: .1, baseFrequency: 80, octaves: 2.8 }, volume: -3 }).connect(bassBus);
-    const chords = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8 }).connect(musicBus);
-    const stab = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sawtooth" }, envelope: { attack: .006, decay: .08, sustain: 0, release: .16 }, volume: -13 }).connect(musicBus);
-    stab.connect(delay);
-    const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
-
-    return { master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, kick, clap, hat, openHat, perc, bass, chords, stab, noise, scene: null, pendingScene: null, transitionStep: -1, step: 0, bar: 0, chordIndex: 0, transition: false, loopId: null };
+    return {
+      master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, ...voices,
+      retiredVoices: [], scene: null, pendingScene: null, transitionStep: -1,
+      step: 0, bar: 0, chordIndex: 0, transition: false,
+      nextStepTime: 0, bpmFrom: 120, targetBpm: 120, bpmRampStart: 0, bpmRampEnd: 0,
+      schedulerWorker: null, schedulerUrl: null
+    };
   }
 
   function sceneChord(scene, degree, octave = 60) {
@@ -105,61 +113,113 @@
     else parameter.rampTo(value, duration, time);
   }
 
-  function applyScene(scene, first = false, time) {
+  function tempoAt(time) {
     const e = engine;
+    if (!e || time >= e.bpmRampEnd) return e?.targetBpm || 120;
+    if (time <= e.bpmRampStart) return e.bpmFrom;
+    const progress = (time - e.bpmRampStart) / (e.bpmRampEnd - e.bpmRampStart);
+    return e.bpmFrom + (e.targetBpm - e.bpmFrom) * progress;
+  }
+
+  function applyScene(scene, first = false, time) {
+    const e = engine, at = time === undefined ? Tone.immediate() : time;
+    const currentTempo = tempoAt(at);
     e.scene = scene;
-    Tone.Transport.swing = scene.swing;
-    ramp(Tone.Transport.bpm, scene.bpm, first ? .1 : 8, time);
+    e.bpmFrom = currentTempo;
+    e.targetBpm = scene.bpm;
+    e.bpmRampStart = at;
+    e.bpmRampEnd = at + (first ? .1 : 8);
     ramp(e.bassFilter.frequency, 260 + scene.energy * 1050 + (scene.flavor === "acid" ? 800 : 0), first ? .1 : 6, time);
     ramp(e.musicFilter.frequency, 900 + scene.brightness * 4600, first ? .1 : 7, time);
     ramp(e.drumBus.volume, -7 + scene.energy * 6, 5, time);
     ramp(e.bassBus.volume, -11 + scene.energy * 6, 5, time);
     ramp(e.musicBus.volume, -17 + scene.energy * 8, 7, time);
     ramp(e.reverb.wet, scene.room, first ? .1 : 8, time);
-    updateMeta();
+    ramp(e.delay.delayTime, 45 / scene.bpm, first ? .1 : 8, time);
+    if (time === undefined) updateMeta();
+    else Tone.getDraw().schedule(updateMeta, time);
+  }
+
+  function scheduleStep(time) {
+    const e = engine;
+    if (e.transition && e.step === e.transitionStep) completeTransition(time);
+    const s = e.scene, step = e.step % 16;
+    const beat = Math.floor(step / 4), bar = e.bar;
+    const energy = s.energy, quarter = 60 / tempoAt(time);
+
+    if (step % 4 === 0 && step !== s.kickSkip) e.kick.triggerAttackRelease("C1", quarter * .5, time, .78 + energy * .2);
+    if (step === 4 || step === 12) e.clap.triggerAttackRelease(quarter * .25, time, .58 + energy * .25);
+    if (s.hatMask[step] && !(bar % 8 === 7 && step > 11)) e.hat.triggerAttackRelease(quarter * .125, time, .24 + Math.random() * .22);
+    if (step === 6 || (step === 14 && energy > .45)) e.openHat.triggerAttackRelease(quarter * .25, time, .2 + energy * .2);
+    if (s.percMask[step]) e.perc.triggerAttackRelease(pick(["G2", "A2", "D3"]), quarter * .125, time, .28);
+
+    if (s.bassMask[step]) {
+      const degree = step === 11 && chance(.45) ? pick([3, 4, 5]) : s.progression[beat];
+      const note = s.rootMidi + minor[degree] + s.bassOctave;
+      const adjacentHit = s.bassMask[(step + 1) % 16];
+      const duration = quarter * (adjacentHit ? .125 : (step % 4 === 3 ? .25 : .5));
+      e.bass.triggerAttackRelease(midiNote(note), duration, time, .52 + energy * .28);
+    }
+
+    if (step === 0 && bar % 2 === 0) {
+      const degree = s.progression[Math.floor(bar / 2) % 4];
+      e.chords.triggerAttackRelease(sceneChord(s, degree), quarter * (s.flavor === "deep" ? 4 : 2), time, .25 + energy * .15);
+    }
+    if ((step === 3 || step === 10) && energy > .48 && chance(.62)) {
+      const degree = s.progression[beat];
+      e.stab.triggerAttackRelease(sceneChord(s, degree, 72), quarter * .25, time, .16 + energy * .14);
+    }
+
+    if (step === 0) {
+      if (bar > 0 && bar % 8 === 7) e.noise.triggerAttackRelease(quarter * 2, time, .12 + energy * .14);
+      e.bar++;
+      Tone.getDraw().schedule(updateProgress, time);
+      if (e.bar >= s.bars && !e.transition) transitionScene(time);
+    }
+    e.step++;
+  }
+
+  function schedulerTick() {
+    const e = engine;
+    if (!running || !e || Tone.getContext().state !== "running") return;
+    const now = Tone.immediate();
+    disposeRetiredVoices(now);
+
+    // Never replay a backlog after the tab or main thread was suspended.
+    if (e.nextStepTime < now - .05) e.nextStepTime = now + .05;
+
+    const horizon = now + .12;
+    let scheduled = 0;
+    while (e.nextStepTime < horizon && scheduled < 4) {
+      const time = e.nextStepTime, step = e.step % 16;
+      scheduleStep(time);
+      const sixteenth = 15 / tempoAt(time), swing = e.scene.swing;
+      e.nextStepTime += sixteenth * (step % 2 === 0 ? 2 * swing : 2 * (1 - swing));
+      scheduled++;
+    }
+    if (scheduled === 4 && e.nextStepTime < horizon) e.nextStepTime = now + .05;
   }
 
   function schedule() {
-    engine.loopId = Tone.Transport.scheduleRepeat((time) => {
-      const e = engine;
-      if (e.transition && e.step === e.transitionStep) completeTransition(time);
-      const s = e.scene, step = e.step % 16;
-      const beat = Math.floor(step / 4), bar = e.bar;
-      const energy = s.energy;
-
-      if (step % 4 === 0 && step !== s.kickSkip) e.kick.triggerAttackRelease("C1", "8n", time, .78 + energy * .2);
-      if (step === 4 || step === 12) e.clap.triggerAttackRelease("16n", time, .58 + energy * .25);
-      if (s.hatMask[step] && !(bar % 8 === 7 && step > 11)) e.hat.triggerAttackRelease("32n", time, .24 + Math.random() * .22);
-      if (step === 6 || (step === 14 && energy > .45)) e.openHat.triggerAttackRelease("16n", time, .2 + energy * .2);
-      if (s.percMask[step]) e.perc.triggerAttackRelease(pick(["G2", "A2", "D3"]), "32n", time, .28);
-
-      if (s.bassMask[step]) {
-        const degree = step === 11 && chance(.45) ? pick([3, 4, 5]) : s.progression[beat];
-        const note = s.rootMidi + minor[degree] + s.bassOctave;
-        // MonoSynth cannot queue a new attack before a previously scheduled
-        // release. Shorten notes only when the next sixteenth is another hit.
-        const adjacentHit = s.bassMask[(step + 1) % 16];
-        const duration = adjacentHit ? "32n" : (step % 4 === 3 ? "16n" : "8n");
-        e.bass.triggerAttackRelease(midiNote(note), duration, time, .52 + energy * .28);
-      }
-
-      if (step === 0 && bar % 2 === 0) {
-        const degree = s.progression[Math.floor(bar / 2) % 4];
-        e.chords.triggerAttackRelease(sceneChord(s, degree), s.flavor === "deep" ? "1m" : "2n", time, .25 + energy * .15);
-      }
-      if ((step === 3 || step === 10) && energy > .48 && chance(.62)) {
-        const degree = s.progression[beat];
-        e.stab.triggerAttackRelease(sceneChord(s, degree, 72), "16n", time, .16 + energy * .14);
-      }
-
-      if (step === 0) {
-        if (bar > 0 && bar % 8 === 7) e.noise.triggerAttackRelease("2n", time, .12 + energy * .14);
-        e.bar++;
-        updateProgress();
-        if (e.bar >= s.bars && !e.transition) transitionScene(time);
-      }
-      e.step++;
-    }, "16n");
+    const e = engine;
+    e.nextStepTime = Tone.immediate() + .1;
+    const source = `
+      let active = false, timer = 0;
+      const queue = () => { timer = setTimeout(() => { if (active) postMessage("tick"); }, 25); };
+      onmessage = ({ data }) => {
+        if (data === "start" && !active) { active = true; postMessage("tick"); }
+        else if (data === "ack" && active) queue();
+        else if (data === "stop") { active = false; clearTimeout(timer); }
+      };
+    `;
+    e.schedulerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    e.schedulerWorker = new Worker(e.schedulerUrl);
+    e.schedulerWorker.onmessage = () => {
+      try { schedulerTick(); }
+      catch (err) { console.error(err); }
+      finally { if (running) e.schedulerWorker.postMessage("ack"); }
+    };
+    e.schedulerWorker.postMessage("start");
   }
 
   function transitionScene(time) {
@@ -170,14 +230,31 @@
     e.transitionStep = e.step + 16;
     ramp(e.musicFilter.frequency, 420, 3.5, time);
     ramp(e.bassBus.volume, -22, 3.2, time);
-    Tone.Draw.schedule(() => showToast("MIXING INTO " + next.name.toUpperCase()), time);
+    Tone.getDraw().schedule(() => showToast("MIXING INTO " + next.name.toUpperCase()), time);
+  }
+
+  function rotateVoices(time) {
+    const e = engine;
+    const previous = Object.fromEntries(voiceKeys.map(key => [key, e[key]]));
+    Object.assign(e, createVoices(e.drumBus, e.bassBus, e.musicBus, e.delay, e.reverb));
+    e.retiredVoices.push({ voices: previous, disposeAt: time + 4 });
+  }
+
+  function disposeRetiredVoices(time) {
+    const e = engine;
+    e.retiredVoices = e.retiredVoices.filter(entry => {
+      if (entry.disposeAt > time) return true;
+      voiceKeys.forEach(key => entry.voices[key].dispose());
+      return false;
+    });
   }
 
   function completeTransition(time) {
     const e = engine, next = e.pendingScene;
     e.bar = 0; e.chordIndex = 0;
+    rotateVoices(time);
     applyScene(next, false, time);
-    e.noise.triggerAttackRelease("1m", time, .16);
+    e.noise.triggerAttackRelease(60 / next.bpm * 4, time, .16);
     e.pendingScene = null;
     e.transitionStep = -1;
     e.transition = false;
@@ -188,18 +265,21 @@
     ui.start.disabled = true;
     ui.start.querySelector("b").textContent = "TUNING THE ROOM…";
     try {
+      Tone.setContext(new Tone.Context({ clockSource: "timeout", latencyHint: "playback", lookAhead: .1, updateInterval: .05 }), true);
       await Tone.start();
       engine = buildEngine();
       applyScene(makeScene(), true);
-      schedule();
-      Tone.Transport.start("+0.1");
       running = true;
+      schedule();
       document.body.classList.add("started");
       draw();
       showToast("SESSION LIVE");
       setTimeout(() => $("#console").scrollIntoView({ behavior: "smooth", block: "end" }), 450);
     } catch (err) {
       console.error(err);
+      running = false;
+      engine?.schedulerWorker?.terminate();
+      if (engine?.schedulerUrl) URL.revokeObjectURL(engine.schedulerUrl);
       ui.start.disabled = false;
       ui.start.querySelector("b").textContent = "TRY AGAIN";
       showToast("AUDIO COULD NOT START");
