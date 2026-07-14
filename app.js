@@ -21,6 +21,7 @@
   const minor = [0, 2, 3, 5, 7, 8, 10];
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
   const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "noise"];
+  const scheduleAhead = { foreground: .12, background: 3 };
   let engine = null, running = false, raf = 0, toastTimer;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
 
@@ -188,16 +189,18 @@
     // Never replay a backlog after the tab or main thread was suspended.
     if (e.nextStepTime < now - .05) e.nextStepTime = now + .05;
 
-    const horizon = now + .12;
+    const hidden = document.hidden;
+    const horizon = now + (hidden ? scheduleAhead.background : scheduleAhead.foreground);
+    const maxBatch = hidden ? 40 : 4;
     let scheduled = 0;
-    while (e.nextStepTime < horizon && scheduled < 4) {
+    while (e.nextStepTime < horizon && scheduled < maxBatch) {
       const time = e.nextStepTime, step = e.step % 16;
       scheduleStep(time);
       const sixteenth = 15 / tempoAt(time), swing = e.scene.swing;
       e.nextStepTime += sixteenth * (step % 2 === 0 ? 2 * swing : 2 * (1 - swing));
       scheduled++;
     }
-    if (scheduled === 4 && e.nextStepTime < horizon) e.nextStepTime = now + .05;
+    if (scheduled === maxBatch && e.nextStepTime < horizon) e.nextStepTime = now + .05;
   }
 
   function schedule() {
@@ -327,5 +330,17 @@
   }
   draw();
   window.addEventListener("resize", () => { if (!running) draw(); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && running) Tone.start(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!running) return;
+    if (document.hidden) {
+      // Fill the wider buffer before Chrome begins background throttling.
+      schedulerTick();
+    } else {
+      Tone.start().then(() => {
+        schedulerTick();
+        updateMeta();
+        updateProgress();
+      });
+    }
+  });
 })();
