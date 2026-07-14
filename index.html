@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0b0d">
+  <title>Afterhours — Infinite House</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/Tone.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <main>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Afterhours home">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        AFTERHOURS
+      </a>
+      <div class="live-indicator"><span></span> GENERATIVE SIGNAL</div>
+    </header>
+
+    <section class="stage" aria-labelledby="title">
+      <canvas id="visualizer" aria-label="Live audio spectrum"></canvas>
+      <div class="stage-content">
+        <p class="eyebrow">A NEVER-ENDING HOUSE SESSION</p>
+        <h1 id="title">Music for the<br><em>in-between hours.</em></h1>
+        <p class="intro">Every kick, chord and transition is composed in your browser. No tracks. No loops. No two sessions alike.</p>
+        <button id="startButton" class="start-button" type="button">
+          <span class="play-icon" aria-hidden="true"></span>
+          <span><b>ENTER THE SESSION</b><small>Sound on · headphones recommended</small></span>
+        </button>
+      </div>
+      <div class="orbit orbit-a" aria-hidden="true"></div>
+      <div class="orbit orbit-b" aria-hidden="true"></div>
+    </section>
+
+    <section id="console" class="console" aria-label="Live session status">
+      <div class="now-playing">
+        <span class="playing-pulse" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div>
+          <span class="label">NOW GENERATING</span>
+          <strong id="sceneName">Velvet Transit</strong>
+        </div>
+      </div>
+
+      <div class="readouts" aria-live="polite">
+        <div><span class="label">TEMPO</span><strong><span id="bpm">122</span> <small>BPM</small></strong></div>
+        <div><span class="label">KEY</span><strong id="key">F MIN</strong></div>
+        <div><span class="label">PHASE</span><strong id="phase">WARM UP</strong></div>
+      </div>
+
+      <div class="timeline-wrap">
+        <div class="timeline-copy"><span id="barCount">BAR 01 / 32</span><span id="nextChange">NEXT EVOLUTION IN 32 BARS</span></div>
+        <div class="timeline"><i id="timelineFill"></i></div>
+      </div>
+
+    </section>
+
+    <footer>
+      <span>GENERATED LOCALLY WITH WEB AUDIO</span>
+      <span>∞ MUSIC · ZERO STREAMS</span>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript>This experience needs JavaScript to generate audio.</noscript>
+</body>
+</html>
