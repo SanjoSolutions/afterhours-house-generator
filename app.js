@@ -129,7 +129,11 @@
       if (s.bassMask[step]) {
         const degree = step === 11 && chance(.45) ? pick([3, 4, 5]) : s.progression[beat];
         const note = s.rootMidi + minor[degree] + s.bassOctave;
-        e.bass.triggerAttackRelease(midiNote(note), step % 4 === 3 ? "16n" : "8n", time, .52 + energy * .28);
+        // MonoSynth cannot queue a new attack before a previously scheduled
+        // release. Shorten notes only when the next sixteenth is another hit.
+        const adjacentHit = s.bassMask[(step + 1) % 16];
+        const duration = adjacentHit ? "32n" : (step % 4 === 3 ? "16n" : "8n");
+        e.bass.triggerAttackRelease(midiNote(note), duration, time, .52 + energy * .28);
       }
 
       if (step === 0 && bar % 2 === 0) {
