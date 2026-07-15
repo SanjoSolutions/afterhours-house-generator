@@ -22,9 +22,9 @@
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
   const sceneVoiceKeys = ["bass", "chords", "stab", "piano"];
   const transitionLengthSteps = 32;
-  const scheduleAhead = { foreground: .75, background: 4 };
-  const scheduleBatch = { foreground: 8, background: 40 };
-  const visualFrameInterval = 1000 / 24;
+  const scheduleAhead = { foreground: 1, background: 4 };
+  const scheduleBatch = { foreground: 10, background: 40 };
+  const visualFrameInterval = 1000 / 12;
   let engine = null, running = false, raf = 0, toastTimer;
   let lastVisualFrame = 0, canvasMetrics = null;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
@@ -83,7 +83,7 @@
     const acid = scene.bassPatch === "acid", round = scene.bassPatch === "round";
     return new Tone.MonoSynth({
       oscillator: { type: acid ? "sawtooth" : (round ? "triangle" : "square") },
-      filter: { Q: acid ? 7 : 2, type: "lowpass", rolloff: -24 },
+      filter: { Q: acid ? 7 : 2, type: "lowpass", rolloff: -12 },
       envelope: { attack: .008, decay: acid ? .22 : .15, sustain: acid ? .1 : .18, release: .09 },
       filterEnvelope: { attack: .005, decay: acid ? .25 : .16, sustain: .2, release: .1, baseFrequency: acid ? 110 : 80, octaves: acid ? 4.2 : 2.8 },
       volume: acid ? -5 : -3
@@ -133,7 +133,7 @@
   }
 
   function createGrandPiano(musicBus) {
-    const pianoBus = new Tone.Channel({ volume: -10 }).connect(musicBus);
+    const pianoBus = new Tone.Volume(-10).connect(musicBus);
     const body = capPolyphony(new Tone.PolySynth(Tone.FMSynth, {
       harmonicity: 3.01, modulationIndex: 1.25,
       oscillator: { type: "sine" }, modulation: { type: "triangle" },
@@ -162,18 +162,25 @@
     };
   }
 
-  function createVoices(drumBus, bassBus, musicBus, delay, reverb, scene) {
+  function createVoices(drumBus, bassBus, musicBus, delay, ambience, scene) {
     const kick = new Tone.MembraneSynth({ pitchDecay: .025, octaves: 6, oscillator: { type: "sine" }, envelope: { attack: .001, decay: .28, sustain: .01, release: .12 } }).connect(drumBus);
     const clapFilter = new Tone.Filter(1800, "highpass").connect(drumBus);
     const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, envelope: { attack: .001, decay: .11, sustain: 0 } }).connect(clapFilter);
     // MetalSynth runs six FM oscillator pairs per voice. Filtered noise has the
     // same broad-band hat character at a fraction of the audio-thread cost.
-    const hatFilter = new Tone.Filter(7200, "highpass").connect(drumBus);
+    const hatFilter = new Tone.Filter(6500, "highpass").connect(drumBus);
     const hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: .001, decay: .045, sustain: 0, release: .01 }, volume: -17 }).connect(hatFilter);
-    const openHatFilter = new Tone.Filter(5900, "highpass").connect(drumBus);
-    const openHat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: .001, decay: .2, sustain: 0, release: .035 }, volume: -19 }).connect(openHatFilter);
+    // Closed hits naturally choke open hits, so both articulations can share
+    // one noise source and filter without changing the rhythmic pattern.
+    const openHatFilter = silentVoice();
+    const openHat = {
+      triggerAttackRelease(duration, time, velocity) {
+        hat.triggerAttackRelease(duration, time, velocity * .72);
+      },
+      dispose() {}
+    };
     const perc = new Tone.MembraneSynth({ pitchDecay: .008, octaves: 2, envelope: { attack: .001, decay: .09, sustain: 0, release: .03 }, volume: -13 }).connect(drumBus);
-    const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
+    const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(ambience);
     return {
       kick, clapFilter, clap, hatFilter, hat, openHatFilter, openHat, perc, noise,
       ...createSceneVoices(bassBus, musicBus, delay, scene)
@@ -183,23 +190,24 @@
   function buildEngine(firstScene) {
     const master = new Tone.Gain(0.78);
     const lowCut = new Tone.Filter(28, "highpass");
-    const compressor = new Tone.Compressor({ threshold: -16, ratio: 3, attack: .02, release: .22, knee: 12 });
-    const limiter = new Tone.Limiter(-1);
-    master.chain(lowCut, compressor, limiter, Tone.getDestination());
+    const compressor = new Tone.Compressor({ threshold: -10, ratio: 6, attack: .012, release: .18, knee: 6 });
+    master.chain(lowCut, compressor, Tone.getDestination());
     const analyser = new Tone.Analyser("fft", 64);
     master.connect(analyser);
 
-    const drumBus = new Tone.Channel({ volume: -3 }).connect(master);
-    const bassFilter = new Tone.Filter(700, "lowpass", -24);
-    const bassBus = new Tone.Channel({ volume: -7 }).connect(bassFilter);
+    const drumBus = new Tone.Volume(-3).connect(master);
+    const bassFilter = new Tone.Filter(700, "lowpass", -12);
+    const bassBus = new Tone.Volume(-7).connect(bassFilter);
     bassFilter.connect(master);
     const musicFilter = new Tone.Filter(2600, "lowpass", -12);
-    const musicBus = new Tone.Channel({ volume: -12 }).connect(musicFilter);
+    const musicBus = new Tone.Volume(-12).connect(musicFilter);
     musicFilter.connect(master);
 
-    const reverb = new Tone.Reverb({ decay: 2.4, preDelay: .035, wet: .28 }).connect(master);
+    // A short feedback ambience retains width and space without the constant
+    // convolution cost of Tone.Reverb.
+    const reverb = new Tone.FeedbackDelay({ delayTime: .085, feedback: .13, wet: .32 }).connect(master);
     const delay = new Tone.PingPongDelay(.375, .28).connect(reverb);
-    const send = new Tone.Gain(.18).connect(reverb);
+    const send = new Tone.Gain(.14).connect(reverb);
     musicBus.connect(send);
     const voices = createVoices(drumBus, bassBus, musicBus, delay, reverb, firstScene);
 
@@ -208,7 +216,7 @@
       retiredVoices: [], scene: null, pendingScene: null, pendingVoices: null, transitionStep: -1,
       step: 0, bar: 0, chordIndex: 0, transition: false,
       nextStepTime: 0, bpmFrom: 120, targetBpm: 120, bpmRampStart: 0, bpmRampEnd: 0,
-      schedulerWorker: null, schedulerUrl: null
+      schedulerTick: null
     };
   }
 
@@ -328,23 +336,12 @@
   function schedule() {
     const e = engine;
     e.nextStepTime = Tone.immediate() + .1;
-    const source = `
-      let active = false, timer = 0;
-      const queue = () => { timer = setTimeout(() => { if (active) postMessage("tick"); }, 50); };
-      onmessage = ({ data }) => {
-        if (data === "start" && !active) { active = true; postMessage("tick"); }
-        else if (data === "ack" && active) queue();
-        else if (data === "stop") { active = false; clearTimeout(timer); }
-      };
-    `;
-    e.schedulerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    e.schedulerWorker = new Worker(e.schedulerUrl);
-    e.schedulerWorker.onmessage = () => {
+    e.schedulerTick = () => {
       try { schedulerTick(); }
       catch (err) { console.error(err); }
-      finally { if (running) e.schedulerWorker.postMessage("ack"); }
     };
-    e.schedulerWorker.postMessage("start");
+    Tone.getContext().on("tick", e.schedulerTick);
+    e.schedulerTick();
   }
 
   function transitionScene(time) {
@@ -403,7 +400,8 @@
     ui.start.disabled = true;
     ui.start.querySelector("b").textContent = "TUNING THE ROOM…";
     try {
-      Tone.setContext(new Tone.Context({ clockSource: "timeout", latencyHint: "playback", lookAhead: .1, updateInterval: .05 }), true);
+      const audioContext = new AudioContext({ latencyHint: "playback", sampleRate: 44100 });
+      Tone.setContext(new Tone.Context({ context: audioContext, clockSource: "worker", lookAhead: .1, updateInterval: .1 }), true);
       await Tone.start();
       const firstScene = makeScene();
       engine = buildEngine(firstScene);
@@ -418,8 +416,7 @@
     } catch (err) {
       console.error(err);
       running = false;
-      engine?.schedulerWorker?.terminate();
-      if (engine?.schedulerUrl) URL.revokeObjectURL(engine.schedulerUrl);
+      if (engine?.schedulerTick) Tone.getContext().off("tick", engine.schedulerTick);
       ui.start.disabled = false;
       ui.start.querySelector("b").textContent = "TRY AGAIN";
       showToast("AUDIO COULD NOT START");
@@ -455,7 +452,7 @@
     const c = ui.canvas;
     if (!canvasMetrics) {
       const rect = c.getBoundingClientRect();
-      canvasMetrics = { width: rect.width, height: rect.height, dpr: Math.min(devicePixelRatio, 1.5) };
+      canvasMetrics = { width: rect.width, height: rect.height, dpr: Math.min(devicePixelRatio, 1) };
     }
     const rect = canvasMetrics, dpr = rect.dpr;
     // Canvas dimensions are integers. Comparing them with fractional CSS pixel
@@ -467,7 +464,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
     const values = engine?.analyser ? engine.analyser.getValue() : silenceValues;
-    const count = 40, gap = 5, usable = rect.width * .48, barW = Math.max(2, (usable - gap * count) / count), startX = rect.width * .56;
+    const count = 24, gap = 5, usable = rect.width * .48, barW = Math.max(2, (usable - gap * count) / count), startX = rect.width * .56;
     ctx.save(); ctx.translate(0, rect.height / 2); ctx.fillStyle = "rgba(216,255,62,.44)";
     for (let i = 0; i < count; i++) {
       const value = clamp((values[i] + 100) / 76, 0.015, 1), h = value * rect.height * .34;
