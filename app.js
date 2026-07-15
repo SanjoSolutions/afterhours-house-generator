@@ -21,14 +21,18 @@
   const minor = [0, 2, 3, 5, 7, 8, 10];
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
   const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "piano", "noise"];
-  const scheduleAhead = { foreground: .12, background: 3 };
+  const scheduleAhead = { foreground: 1.25, background: 4 };
+  const scheduleBatch = { foreground: 16, background: 40 };
+  const visualFrameInterval = 1000 / 30;
   let engine = null, running = false, raf = 0, toastTimer;
+  let lastVisualFrame = 0;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
 
   const pick = (a) => a[Math.floor(Math.random() * a.length)];
   const chance = (p) => Math.random() < p;
   const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
   const midiNote = (m) => Tone.Frequency(m, "midi").toNote();
+  const capPolyphony = (synth, maximum) => { synth.maxPolyphony = maximum; return synth; };
 
   function makeScene() {
     if (journeyCount && chance(.16)) journeyFlavor = pick(["deep", "classic", "disco", "acid"].filter(x => x !== journeyFlavor));
@@ -84,41 +88,41 @@
 
   function createChords(scene, musicBus) {
     if (scene.chordPatch === "glass") {
-      return new Tone.PolySynth(Tone.FMSynth, {
+      return capPolyphony(new Tone.PolySynth(Tone.FMSynth, {
         harmonicity: 2.01, modulationIndex: 1.5,
         oscillator: { type: "sine" }, modulation: { type: "triangle" },
         envelope: { attack: .012, decay: .3, sustain: .05, release: .9 },
         modulationEnvelope: { attack: .01, decay: .22, sustain: .04, release: .55 }, volume: -10
-      }).connect(musicBus);
+      }), 12).connect(musicBus);
     }
     if (scene.chordPatch === "organ") {
-      return new Tone.PolySynth(Tone.Synth, {
+      return capPolyphony(new Tone.PolySynth(Tone.Synth, {
         oscillator: { type: "square" }, envelope: { attack: .012, decay: .16, sustain: .3, release: .38 }, volume: -12
-      }).connect(musicBus);
+      }), 12).connect(musicBus);
     }
     if (scene.chordPatch === "haze") {
-      return new Tone.PolySynth(Tone.AMSynth, {
+      return capPolyphony(new Tone.PolySynth(Tone.AMSynth, {
         harmonicity: 1.5, oscillator: { type: "sine" }, modulation: { type: "triangle" },
         envelope: { attack: .04, decay: .35, sustain: .12, release: 1.1 },
         modulationEnvelope: { attack: .08, decay: .25, sustain: .18, release: .8 }, volume: -11
-      }).connect(musicBus);
+      }), 12).connect(musicBus);
     }
-    return new Tone.PolySynth(Tone.Synth, {
+    return capPolyphony(new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8
-    }).connect(musicBus);
+    }), 12).connect(musicBus);
   }
 
   function createStab(scene, musicBus, delay) {
     const stab = scene.stabPatch === "fm"
-      ? new Tone.PolySynth(Tone.FMSynth, {
+      ? capPolyphony(new Tone.PolySynth(Tone.FMSynth, {
         harmonicity: 3, modulationIndex: 2.4, oscillator: { type: "sine" }, modulation: { type: "square" },
         envelope: { attack: .004, decay: .09, sustain: 0, release: .18 },
         modulationEnvelope: { attack: .002, decay: .06, sustain: 0, release: .1 }, volume: -15
-      })
-      : new Tone.PolySynth(Tone.Synth, {
+      }), 24)
+      : capPolyphony(new Tone.PolySynth(Tone.Synth, {
         oscillator: { type: scene.stabPatch === "bright" ? "sawtooth" : "triangle" },
         envelope: { attack: .006, decay: scene.stabPatch === "bright" ? .08 : .13, sustain: 0, release: .16 }, volume: -13
-      });
+      }), 24);
     stab.connect(musicBus);
     stab.connect(delay);
     return stab;
@@ -126,15 +130,15 @@
 
   function createGrandPiano(musicBus) {
     const pianoBus = new Tone.Channel({ volume: -10 }).connect(musicBus);
-    const body = new Tone.PolySynth(Tone.FMSynth, {
+    const body = capPolyphony(new Tone.PolySynth(Tone.FMSynth, {
       harmonicity: 3.01, modulationIndex: 1.25,
       oscillator: { type: "sine" }, modulation: { type: "triangle" },
       envelope: { attack: .003, decay: 1.45, sustain: .025, release: 1.25 },
       modulationEnvelope: { attack: .002, decay: .32, sustain: 0, release: .22 }, volume: -5
-    }).connect(pianoBus);
-    const hammer = new Tone.PolySynth(Tone.Synth, {
+    }), 32).connect(pianoBus);
+    const hammer = capPolyphony(new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" }, envelope: { attack: .001, decay: .055, sustain: 0, release: .09 }, volume: -15
-    }).connect(pianoBus);
+    }), 24).connect(pianoBus);
     return {
       triggerAttackRelease(notes, duration, time, velocity) {
         body.triggerAttackRelease(notes, duration, time, velocity);
@@ -284,7 +288,7 @@
     disposeRetiredVoices(now);
 
     // Never replay a backlog after the tab or main thread was suspended.
-    if (e.nextStepTime < now - .05) {
+    if (e.nextStepTime < now) {
       releaseSustainedVoices(e, now + .001);
       e.retiredVoices.forEach(entry => releaseSustainedVoices(entry.voices, now + .001));
       e.nextStepTime = now + .05;
@@ -292,7 +296,7 @@
 
     const hidden = document.hidden;
     const horizon = now + (hidden ? scheduleAhead.background : scheduleAhead.foreground);
-    const maxBatch = hidden ? 40 : 4;
+    const maxBatch = hidden ? scheduleBatch.background : scheduleBatch.foreground;
     let scheduled = 0;
     while (e.nextStepTime < horizon && scheduled < maxBatch) {
       const time = e.nextStepTime, step = e.step % 16;
@@ -301,7 +305,8 @@
       e.nextStepTime += sixteenth * (step % 2 === 0 ? 2 * swing : 2 * (1 - swing));
       scheduled++;
     }
-    if (scheduled === maxBatch && e.nextStepTime < horizon) e.nextStepTime = now + .05;
+    // If the batch is full, keep the exact next step for the following worker
+    // tick. Dropping it here causes an audible jump under CPU pressure.
   }
 
   function schedule() {
@@ -419,7 +424,12 @@
   ui.start.addEventListener("click", start);
 
   const ctx = ui.canvas.getContext("2d");
-  function draw() {
+  function draw(timestamp = 0) {
+    if (running && timestamp && timestamp - lastVisualFrame < visualFrameInterval) {
+      raf = requestAnimationFrame(draw);
+      return;
+    }
+    if (timestamp) lastVisualFrame = timestamp;
     const c = ui.canvas, rect = c.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);
     // Canvas dimensions are integers. Comparing them with fractional CSS pixel
     // values caused the backing store to be reallocated on every frame at many
