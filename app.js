@@ -20,12 +20,13 @@
   const semis = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, Bb: 10 };
   const minor = [0, 2, 3, 5, 7, 8, 10];
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
-  const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "piano", "noise"];
-  const scheduleAhead = { foreground: 1.25, background: 4 };
-  const scheduleBatch = { foreground: 16, background: 40 };
-  const visualFrameInterval = 1000 / 30;
+  const sceneVoiceKeys = ["bass", "chords", "stab", "piano"];
+  const transitionLengthSteps = 32;
+  const scheduleAhead = { foreground: .75, background: 4 };
+  const scheduleBatch = { foreground: 8, background: 40 };
+  const visualFrameInterval = 1000 / 24;
   let engine = null, running = false, raf = 0, toastTimer;
-  let lastVisualFrame = 0;
+  let lastVisualFrame = 0, canvasMetrics = null;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
 
   const pick = (a) => a[Math.floor(Math.random() * a.length)];
@@ -33,6 +34,9 @@
   const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
   const midiNote = (m) => Tone.Frequency(m, "midi").toNote();
   const capPolyphony = (synth, maximum) => { synth.maxPolyphony = maximum; return synth; };
+  const silentVoice = () => ({
+    triggerAttackRelease() {}, triggerRelease() {}, releaseAll() {}, dispose() {}
+  });
 
   function makeScene() {
     if (journeyCount && chance(.16)) journeyFlavor = pick(["deep", "classic", "disco", "acid"].filter(x => x !== journeyFlavor));
@@ -93,23 +97,23 @@
         oscillator: { type: "sine" }, modulation: { type: "triangle" },
         envelope: { attack: .012, decay: .3, sustain: .05, release: .9 },
         modulationEnvelope: { attack: .01, decay: .22, sustain: .04, release: .55 }, volume: -10
-      }), 12).connect(musicBus);
+      }), 8).connect(musicBus);
     }
     if (scene.chordPatch === "organ") {
       return capPolyphony(new Tone.PolySynth(Tone.Synth, {
         oscillator: { type: "square" }, envelope: { attack: .012, decay: .16, sustain: .3, release: .38 }, volume: -12
-      }), 12).connect(musicBus);
+      }), 8).connect(musicBus);
     }
     if (scene.chordPatch === "haze") {
       return capPolyphony(new Tone.PolySynth(Tone.AMSynth, {
         harmonicity: 1.5, oscillator: { type: "sine" }, modulation: { type: "triangle" },
         envelope: { attack: .04, decay: .35, sustain: .12, release: 1.1 },
         modulationEnvelope: { attack: .08, decay: .25, sustain: .18, release: .8 }, volume: -11
-      }), 12).connect(musicBus);
+      }), 8).connect(musicBus);
     }
     return capPolyphony(new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8
-    }), 12).connect(musicBus);
+    }), 8).connect(musicBus);
   }
 
   function createStab(scene, musicBus, delay) {
@@ -118,11 +122,11 @@
         harmonicity: 3, modulationIndex: 2.4, oscillator: { type: "sine" }, modulation: { type: "square" },
         envelope: { attack: .004, decay: .09, sustain: 0, release: .18 },
         modulationEnvelope: { attack: .002, decay: .06, sustain: 0, release: .1 }, volume: -15
-      }), 24)
+      }), 8)
       : capPolyphony(new Tone.PolySynth(Tone.Synth, {
         oscillator: { type: scene.stabPatch === "bright" ? "sawtooth" : "triangle" },
         envelope: { attack: .006, decay: scene.stabPatch === "bright" ? .08 : .13, sustain: 0, release: .16 }, volume: -13
-      }), 24);
+      }), 8);
     stab.connect(musicBus);
     stab.connect(delay);
     return stab;
@@ -135,10 +139,10 @@
       oscillator: { type: "sine" }, modulation: { type: "triangle" },
       envelope: { attack: .003, decay: 1.45, sustain: .025, release: 1.25 },
       modulationEnvelope: { attack: .002, decay: .32, sustain: 0, release: .22 }, volume: -5
-    }), 32).connect(pianoBus);
+    }), 16).connect(pianoBus);
     const hammer = capPolyphony(new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" }, envelope: { attack: .001, decay: .055, sustain: 0, release: .09 }, volume: -15
-    }), 24).connect(pianoBus);
+    }), 8).connect(pianoBus);
     return {
       triggerAttackRelease(notes, duration, time, velocity) {
         body.triggerAttackRelease(notes, duration, time, velocity);
@@ -149,19 +153,31 @@
     };
   }
 
+  function createSceneVoices(bassBus, musicBus, delay, scene) {
+    return {
+      bass: createBass(scene, bassBus),
+      chords: createChords(scene, musicBus),
+      stab: scene.energy > .48 ? createStab(scene, musicBus, delay) : silentVoice(),
+      piano: scene.piano ? createGrandPiano(musicBus) : silentVoice()
+    };
+  }
+
   function createVoices(drumBus, bassBus, musicBus, delay, reverb, scene) {
     const kick = new Tone.MembraneSynth({ pitchDecay: .025, octaves: 6, oscillator: { type: "sine" }, envelope: { attack: .001, decay: .28, sustain: .01, release: .12 } }).connect(drumBus);
     const clapFilter = new Tone.Filter(1800, "highpass").connect(drumBus);
     const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, envelope: { attack: .001, decay: .11, sustain: 0 } }).connect(clapFilter);
-    const hat = new Tone.MetalSynth({ frequency: 220, envelope: { attack: .001, decay: .055, release: .01 }, harmonicity: 5.1, modulationIndex: 24, resonance: 3100, octaves: 1.3, volume: -14 }).connect(drumBus);
-    const openHat = new Tone.MetalSynth({ frequency: 185, envelope: { attack: .001, decay: .24, release: .04 }, harmonicity: 5.1, modulationIndex: 20, resonance: 2800, octaves: 1.2, volume: -17 }).connect(drumBus);
+    // MetalSynth runs six FM oscillator pairs per voice. Filtered noise has the
+    // same broad-band hat character at a fraction of the audio-thread cost.
+    const hatFilter = new Tone.Filter(7200, "highpass").connect(drumBus);
+    const hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: .001, decay: .045, sustain: 0, release: .01 }, volume: -17 }).connect(hatFilter);
+    const openHatFilter = new Tone.Filter(5900, "highpass").connect(drumBus);
+    const openHat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: .001, decay: .2, sustain: 0, release: .035 }, volume: -19 }).connect(openHatFilter);
     const perc = new Tone.MembraneSynth({ pitchDecay: .008, octaves: 2, envelope: { attack: .001, decay: .09, sustain: 0, release: .03 }, volume: -13 }).connect(drumBus);
-    const bass = createBass(scene, bassBus);
-    const chords = createChords(scene, musicBus);
-    const stab = createStab(scene, musicBus, delay);
-    const piano = createGrandPiano(musicBus);
     const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
-    return { kick, clapFilter, clap, hat, openHat, perc, bass, chords, stab, piano, noise };
+    return {
+      kick, clapFilter, clap, hatFilter, hat, openHatFilter, openHat, perc, noise,
+      ...createSceneVoices(bassBus, musicBus, delay, scene)
+    };
   }
 
   function buildEngine(firstScene) {
@@ -181,7 +197,7 @@
     const musicBus = new Tone.Channel({ volume: -12 }).connect(musicFilter);
     musicFilter.connect(master);
 
-    const reverb = new Tone.Reverb({ decay: 3.2, preDelay: .035, wet: .28 }).connect(master);
+    const reverb = new Tone.Reverb({ decay: 2.4, preDelay: .035, wet: .28 }).connect(master);
     const delay = new Tone.PingPongDelay(.375, .28).connect(reverb);
     const send = new Tone.Gain(.18).connect(reverb);
     musicBus.connect(send);
@@ -189,7 +205,7 @@
 
     return {
       master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, ...voices,
-      retiredVoices: [], scene: null, pendingScene: null, transitionStep: -1,
+      retiredVoices: [], scene: null, pendingScene: null, pendingVoices: null, transitionStep: -1,
       step: 0, bar: 0, chordIndex: 0, transition: false,
       nextStepTime: 0, bpmFrom: 120, targetBpm: 120, bpmRampStart: 0, bpmRampEnd: 0,
       schedulerWorker: null, schedulerUrl: null
@@ -314,7 +330,7 @@
     e.nextStepTime = Tone.immediate() + .1;
     const source = `
       let active = false, timer = 0;
-      const queue = () => { timer = setTimeout(() => { if (active) postMessage("tick"); }, 25); };
+      const queue = () => { timer = setTimeout(() => { if (active) postMessage("tick"); }, 50); };
       onmessage = ({ data }) => {
         if (data === "start" && !active) { active = true; postMessage("tick"); }
         else if (data === "ack" && active) queue();
@@ -336,33 +352,36 @@
     e.transition = true;
     const next = makeScene();
     e.pendingScene = next;
-    e.transitionStep = e.step + 16;
+    // Prepare the new scene while the old one starts fading. Constructing a
+    // complete graph at the handoff can starve the audio renderer and click.
+    e.pendingVoices = createSceneVoices(e.bassBus, e.musicBus, e.delay, next);
+    e.transitionStep = e.step + transitionLengthSteps;
     ramp(e.musicFilter.frequency, 420, 3.5, time);
     ramp(e.bassBus.volume, -22, 3.2, time);
     Tone.getDraw().schedule(() => showToast("MIXING INTO " + next.name.toUpperCase()), time);
   }
 
-  function rotateVoices(time, nextScene) {
+  function rotateVoices(time, nextVoices) {
     const e = engine;
-    const previous = Object.fromEntries(voiceKeys.map(key => [key, e[key]]));
+    const previous = Object.fromEntries(sceneVoiceKeys.map(key => [key, e[key]]));
     releaseSustainedVoices(previous, time + .001);
-    Object.assign(e, createVoices(e.drumBus, e.bassBus, e.musicBus, e.delay, e.reverb, nextScene));
+    Object.assign(e, nextVoices);
     e.retiredVoices.push({ voices: previous, disposeAt: time + 4 });
   }
 
   function releaseSustainedVoices(voices, time) {
-    voices.bass.triggerRelease(time);
-    voices.chords.releaseAll(time);
-    voices.stab.releaseAll(time);
-    voices.piano.releaseAll(time);
-    voices.noise.triggerRelease(time);
+    voices.bass?.triggerRelease(time);
+    voices.chords?.releaseAll(time);
+    voices.stab?.releaseAll(time);
+    voices.piano?.releaseAll(time);
+    voices.noise?.triggerRelease(time);
   }
 
   function disposeRetiredVoices(time) {
     const e = engine;
     e.retiredVoices = e.retiredVoices.filter(entry => {
       if (entry.disposeAt > time) return true;
-      voiceKeys.forEach(key => entry.voices[key].dispose());
+      sceneVoiceKeys.forEach(key => entry.voices[key].dispose());
       return false;
     });
   }
@@ -370,10 +389,11 @@
   function completeTransition(time) {
     const e = engine, next = e.pendingScene;
     e.bar = 0; e.chordIndex = 0;
-    rotateVoices(time, next);
+    rotateVoices(time, e.pendingVoices);
     applyScene(next, false, time);
     e.noise.triggerAttackRelease(60 / next.bpm * 4, time, .16);
     e.pendingScene = null;
+    e.pendingVoices = null;
     e.transitionStep = -1;
     e.transition = false;
   }
@@ -391,6 +411,7 @@
       running = true;
       schedule();
       document.body.classList.add("started");
+      canvasMetrics = null;
       draw();
       showToast("SESSION LIVE");
       setTimeout(() => $("#console").scrollIntoView({ behavior: "smooth", block: "end" }), 450);
@@ -424,13 +445,19 @@
   ui.start.addEventListener("click", start);
 
   const ctx = ui.canvas.getContext("2d");
+  const silenceValues = new Float32Array(64).fill(-100);
   function draw(timestamp = 0) {
     if (running && timestamp && timestamp - lastVisualFrame < visualFrameInterval) {
       raf = requestAnimationFrame(draw);
       return;
     }
     if (timestamp) lastVisualFrame = timestamp;
-    const c = ui.canvas, rect = c.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);
+    const c = ui.canvas;
+    if (!canvasMetrics) {
+      const rect = c.getBoundingClientRect();
+      canvasMetrics = { width: rect.width, height: rect.height, dpr: Math.min(devicePixelRatio, 1.5) };
+    }
+    const rect = canvasMetrics, dpr = rect.dpr;
     // Canvas dimensions are integers. Comparing them with fractional CSS pixel
     // values caused the backing store to be reallocated on every frame at many
     // Windows display scales, eventually making the page appear frozen.
@@ -439,8 +466,8 @@
     if (c.width !== pixelWidth || c.height !== pixelHeight) { c.width = pixelWidth; c.height = pixelHeight; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
-    const values = engine?.analyser ? engine.analyser.getValue() : new Float32Array(96).fill(-100);
-    const count = 48, gap = 5, usable = rect.width * .48, barW = Math.max(2, (usable - gap * count) / count), startX = rect.width * .56;
+    const values = engine?.analyser ? engine.analyser.getValue() : silenceValues;
+    const count = 40, gap = 5, usable = rect.width * .48, barW = Math.max(2, (usable - gap * count) / count), startX = rect.width * .56;
     ctx.save(); ctx.translate(0, rect.height / 2); ctx.fillStyle = "rgba(216,255,62,.44)";
     for (let i = 0; i < count; i++) {
       const value = clamp((values[i] + 100) / 76, 0.015, 1), h = value * rect.height * .34;
@@ -450,7 +477,10 @@
     if (running) raf = requestAnimationFrame(draw);
   }
   draw();
-  window.addEventListener("resize", () => { if (!running) draw(); });
+  new ResizeObserver(() => {
+    canvasMetrics = null;
+    if (!running) draw();
+  }).observe(ui.canvas);
   document.addEventListener("visibilitychange", () => {
     if (!running) return;
     if (document.hidden) {
