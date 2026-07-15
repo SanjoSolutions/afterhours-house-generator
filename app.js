@@ -187,7 +187,11 @@
     disposeRetiredVoices(now);
 
     // Never replay a backlog after the tab or main thread was suspended.
-    if (e.nextStepTime < now - .05) e.nextStepTime = now + .05;
+    if (e.nextStepTime < now - .05) {
+      releaseSustainedVoices(e, now + .001);
+      e.retiredVoices.forEach(entry => releaseSustainedVoices(entry.voices, now + .001));
+      e.nextStepTime = now + .05;
+    }
 
     const hidden = document.hidden;
     const horizon = now + (hidden ? scheduleAhead.background : scheduleAhead.foreground);
@@ -239,8 +243,16 @@
   function rotateVoices(time) {
     const e = engine;
     const previous = Object.fromEntries(voiceKeys.map(key => [key, e[key]]));
+    releaseSustainedVoices(previous, time + .001);
     Object.assign(e, createVoices(e.drumBus, e.bassBus, e.musicBus, e.delay, e.reverb));
     e.retiredVoices.push({ voices: previous, disposeAt: time + 4 });
+  }
+
+  function releaseSustainedVoices(voices, time) {
+    voices.bass.triggerRelease(time);
+    voices.chords.releaseAll(time);
+    voices.stab.releaseAll(time);
+    voices.noise.triggerRelease(time);
   }
 
   function disposeRetiredVoices(time) {
