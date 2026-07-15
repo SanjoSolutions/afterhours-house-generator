@@ -20,7 +20,7 @@
   const semis = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, Bb: 10 };
   const minor = [0, 2, 3, 5, 7, 8, 10];
   const chordTypes = [[0, 3, 7, 10], [0, 3, 7, 12], [0, 4, 7, 10]];
-  const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "noise"];
+  const voiceKeys = ["kick", "clapFilter", "clap", "hat", "openHat", "perc", "bass", "chords", "stab", "piano", "noise"];
   const scheduleAhead = { foreground: .12, background: 3 };
   let engine = null, running = false, raf = 0, toastTimer;
   let journeyFlavor = "deep", journeyEnergy = .58, journeyCount = 0;
@@ -43,11 +43,18 @@
     const bassMask = Array.from({ length: 16 }, (_, i) => (i % 4 === 2 || (i % 4 === 3 && chance(.42)) || (i === 11 && chance(.6))));
     const hatMask = Array.from({ length: 16 }, (_, i) => i % 2 === 1 && (chance(.88) || i % 4 === 2));
     const percMask = Array.from({ length: 16 }, (_, i) => chance(.12 + energy * .13) && i % 4 !== 0);
+    const bassPatch = pick({ deep: ["sub", "sub", "round", "fm"], classic: ["round", "sub", "fm"], disco: ["round", "fm", "sub"], acid: ["acid", "acid", "fm"] }[flavor]);
+    const chordPatch = pick({ deep: ["silk", "silk", "haze", "glass"], classic: ["organ", "silk", "glass"], disco: ["organ", "glass", "silk"], acid: ["haze", "glass", "silk"] }[flavor]);
+    const stabPatch = pick({ deep: ["soft", "fm"], classic: ["bright", "fm", "soft"], disco: ["bright", "bright", "fm"], acid: ["fm", "bright"] }[flavor]);
+    const pianoChance = { deep: .16, classic: .42, disco: .3, acid: .07 }[flavor];
     return {
       flavor, root, rootMidi: 36 + semis[root], energy,
       bpm: bpmBase + Math.floor(Math.random() * 5) - 2,
       name: pick(names[flavor]), phase: pick(phases), progression,
       kickSkip, bassMask, hatMask, percMask,
+      bassPatch, chordPatch, stabPatch,
+      piano: chance(pianoChance),
+      pianoPattern: pick([[0, 6, 10], [0, 7, 14], [0, 10], [0, 3, 10, 14]]),
       bassOctave: chance(.28) ? 12 : 0,
       swing: .52 + Math.random() * .12,
       chordType: flavor === "disco" ? 2 : pick([0, 0, 1, 2]),
@@ -56,22 +63,104 @@
     };
   }
 
-  function createVoices(drumBus, bassBus, musicBus, delay, reverb) {
+  function createBass(scene, bassBus) {
+    if (scene.bassPatch === "fm") {
+      return new Tone.FMSynth({
+        harmonicity: .5, modulationIndex: 2.2,
+        oscillator: { type: "sine" }, modulation: { type: "square" },
+        envelope: { attack: .006, decay: .17, sustain: .16, release: .1 },
+        modulationEnvelope: { attack: .004, decay: .12, sustain: .08, release: .08 }, volume: -4
+      }).connect(bassBus);
+    }
+    const acid = scene.bassPatch === "acid", round = scene.bassPatch === "round";
+    return new Tone.MonoSynth({
+      oscillator: { type: acid ? "sawtooth" : (round ? "triangle" : "square") },
+      filter: { Q: acid ? 7 : 2, type: "lowpass", rolloff: -24 },
+      envelope: { attack: .008, decay: acid ? .22 : .15, sustain: acid ? .1 : .18, release: .09 },
+      filterEnvelope: { attack: .005, decay: acid ? .25 : .16, sustain: .2, release: .1, baseFrequency: acid ? 110 : 80, octaves: acid ? 4.2 : 2.8 },
+      volume: acid ? -5 : -3
+    }).connect(bassBus);
+  }
+
+  function createChords(scene, musicBus) {
+    if (scene.chordPatch === "glass") {
+      return new Tone.PolySynth(Tone.FMSynth, {
+        harmonicity: 2.01, modulationIndex: 1.5,
+        oscillator: { type: "sine" }, modulation: { type: "triangle" },
+        envelope: { attack: .012, decay: .3, sustain: .05, release: .9 },
+        modulationEnvelope: { attack: .01, decay: .22, sustain: .04, release: .55 }, volume: -10
+      }).connect(musicBus);
+    }
+    if (scene.chordPatch === "organ") {
+      return new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "square" }, envelope: { attack: .012, decay: .16, sustain: .3, release: .38 }, volume: -12
+      }).connect(musicBus);
+    }
+    if (scene.chordPatch === "haze") {
+      return new Tone.PolySynth(Tone.AMSynth, {
+        harmonicity: 1.5, oscillator: { type: "sine" }, modulation: { type: "triangle" },
+        envelope: { attack: .04, decay: .35, sustain: .12, release: 1.1 },
+        modulationEnvelope: { attack: .08, decay: .25, sustain: .18, release: .8 }, volume: -11
+      }).connect(musicBus);
+    }
+    return new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8
+    }).connect(musicBus);
+  }
+
+  function createStab(scene, musicBus, delay) {
+    const stab = scene.stabPatch === "fm"
+      ? new Tone.PolySynth(Tone.FMSynth, {
+        harmonicity: 3, modulationIndex: 2.4, oscillator: { type: "sine" }, modulation: { type: "square" },
+        envelope: { attack: .004, decay: .09, sustain: 0, release: .18 },
+        modulationEnvelope: { attack: .002, decay: .06, sustain: 0, release: .1 }, volume: -15
+      })
+      : new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: scene.stabPatch === "bright" ? "sawtooth" : "triangle" },
+        envelope: { attack: .006, decay: scene.stabPatch === "bright" ? .08 : .13, sustain: 0, release: .16 }, volume: -13
+      });
+    stab.connect(musicBus);
+    stab.connect(delay);
+    return stab;
+  }
+
+  function createGrandPiano(musicBus) {
+    const pianoBus = new Tone.Channel({ volume: -10 }).connect(musicBus);
+    const body = new Tone.PolySynth(Tone.FMSynth, {
+      harmonicity: 3.01, modulationIndex: 1.25,
+      oscillator: { type: "sine" }, modulation: { type: "triangle" },
+      envelope: { attack: .003, decay: 1.45, sustain: .025, release: 1.25 },
+      modulationEnvelope: { attack: .002, decay: .32, sustain: 0, release: .22 }, volume: -5
+    }).connect(pianoBus);
+    const hammer = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" }, envelope: { attack: .001, decay: .055, sustain: 0, release: .09 }, volume: -15
+    }).connect(pianoBus);
+    return {
+      triggerAttackRelease(notes, duration, time, velocity) {
+        body.triggerAttackRelease(notes, duration, time, velocity);
+        hammer.triggerAttackRelease(notes, .045, time, velocity * .75);
+      },
+      releaseAll(time) { body.releaseAll(time); hammer.releaseAll(time); },
+      dispose() { body.dispose(); hammer.dispose(); pianoBus.dispose(); }
+    };
+  }
+
+  function createVoices(drumBus, bassBus, musicBus, delay, reverb, scene) {
     const kick = new Tone.MembraneSynth({ pitchDecay: .025, octaves: 6, oscillator: { type: "sine" }, envelope: { attack: .001, decay: .28, sustain: .01, release: .12 } }).connect(drumBus);
     const clapFilter = new Tone.Filter(1800, "highpass").connect(drumBus);
     const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, envelope: { attack: .001, decay: .11, sustain: 0 } }).connect(clapFilter);
     const hat = new Tone.MetalSynth({ frequency: 220, envelope: { attack: .001, decay: .055, release: .01 }, harmonicity: 5.1, modulationIndex: 24, resonance: 3100, octaves: 1.3, volume: -14 }).connect(drumBus);
     const openHat = new Tone.MetalSynth({ frequency: 185, envelope: { attack: .001, decay: .24, release: .04 }, harmonicity: 5.1, modulationIndex: 20, resonance: 2800, octaves: 1.2, volume: -17 }).connect(drumBus);
     const perc = new Tone.MembraneSynth({ pitchDecay: .008, octaves: 2, envelope: { attack: .001, decay: .09, sustain: 0, release: .03 }, volume: -13 }).connect(drumBus);
-    const bass = new Tone.MonoSynth({ oscillator: { type: "square" }, filter: { Q: 2, type: "lowpass", rolloff: -24 }, envelope: { attack: .008, decay: .15, sustain: .18, release: .09 }, filterEnvelope: { attack: .005, decay: .16, sustain: .2, release: .1, baseFrequency: 80, octaves: 2.8 }, volume: -3 }).connect(bassBus);
-    const chords = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "triangle8" }, envelope: { attack: .018, decay: .22, sustain: .08, release: .65 }, volume: -8 }).connect(musicBus);
-    const stab = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sawtooth" }, envelope: { attack: .006, decay: .08, sustain: 0, release: .16 }, volume: -13 }).connect(musicBus);
-    stab.connect(delay);
+    const bass = createBass(scene, bassBus);
+    const chords = createChords(scene, musicBus);
+    const stab = createStab(scene, musicBus, delay);
+    const piano = createGrandPiano(musicBus);
     const noise = new Tone.NoiseSynth({ noise: { type: "brown" }, envelope: { attack: .3, decay: 1.4, sustain: 0, release: .4 }, volume: -20 }).connect(reverb);
-    return { kick, clapFilter, clap, hat, openHat, perc, bass, chords, stab, noise };
+    return { kick, clapFilter, clap, hat, openHat, perc, bass, chords, stab, piano, noise };
   }
 
-  function buildEngine() {
+  function buildEngine(firstScene) {
     const master = new Tone.Gain(0.78);
     const lowCut = new Tone.Filter(28, "highpass");
     const compressor = new Tone.Compressor({ threshold: -16, ratio: 3, attack: .02, release: .22, knee: 12 });
@@ -92,7 +181,7 @@
     const delay = new Tone.PingPongDelay(.375, .28).connect(reverb);
     const send = new Tone.Gain(.18).connect(reverb);
     musicBus.connect(send);
-    const voices = createVoices(drumBus, bassBus, musicBus, delay, reverb);
+    const voices = createVoices(drumBus, bassBus, musicBus, delay, reverb, firstScene);
 
     return {
       master, analyser, drumBus, bassBus, musicBus, bassFilter, musicFilter, reverb, delay, ...voices,
@@ -159,12 +248,20 @@
       const note = s.rootMidi + minor[degree] + s.bassOctave;
       const adjacentHit = s.bassMask[(step + 1) % 16];
       const duration = quarter * (adjacentHit ? .125 : (step % 4 === 3 ? .25 : .5));
-      e.bass.triggerAttackRelease(midiNote(note), duration, time, .52 + energy * .28);
+      // Keep the low end on the straight grid. Odd sixteenths retain swing in
+      // the drums, but delaying bass attacks can make one note feel late.
+      const swingDelay = step % 2 === 1 ? quarter * .25 * (2 * s.swing - 1) : 0;
+      e.bass.triggerAttackRelease(midiNote(note), duration, time - swingDelay, .52 + energy * .28);
     }
 
     if (step === 0 && bar % 2 === 0) {
       const degree = s.progression[Math.floor(bar / 2) % 4];
-      e.chords.triggerAttackRelease(sceneChord(s, degree), quarter * (s.flavor === "deep" ? 4 : 2), time, .25 + energy * .15);
+      e.chords.triggerAttackRelease(sceneChord(s, degree), quarter * (s.flavor === "deep" ? 4 : 2), time, (s.piano ? .15 : .25) + energy * .15);
+    }
+    if (s.piano && bar % 2 === 0 && s.pianoPattern.includes(step)) {
+      const degree = s.progression[Math.floor(bar / 2) % 4];
+      const duration = quarter * (step === 0 ? .8 : .34);
+      e.piano.triggerAttackRelease(sceneChord(s, degree), duration, time, .19 + energy * .16);
     }
     if ((step === 3 || step === 10) && energy > .48 && chance(.62)) {
       const degree = s.progression[beat];
@@ -240,11 +337,11 @@
     Tone.getDraw().schedule(() => showToast("MIXING INTO " + next.name.toUpperCase()), time);
   }
 
-  function rotateVoices(time) {
+  function rotateVoices(time, nextScene) {
     const e = engine;
     const previous = Object.fromEntries(voiceKeys.map(key => [key, e[key]]));
     releaseSustainedVoices(previous, time + .001);
-    Object.assign(e, createVoices(e.drumBus, e.bassBus, e.musicBus, e.delay, e.reverb));
+    Object.assign(e, createVoices(e.drumBus, e.bassBus, e.musicBus, e.delay, e.reverb, nextScene));
     e.retiredVoices.push({ voices: previous, disposeAt: time + 4 });
   }
 
@@ -252,6 +349,7 @@
     voices.bass.triggerRelease(time);
     voices.chords.releaseAll(time);
     voices.stab.releaseAll(time);
+    voices.piano.releaseAll(time);
     voices.noise.triggerRelease(time);
   }
 
@@ -267,7 +365,7 @@
   function completeTransition(time) {
     const e = engine, next = e.pendingScene;
     e.bar = 0; e.chordIndex = 0;
-    rotateVoices(time);
+    rotateVoices(time, next);
     applyScene(next, false, time);
     e.noise.triggerAttackRelease(60 / next.bpm * 4, time, .16);
     e.pendingScene = null;
@@ -282,8 +380,9 @@
     try {
       Tone.setContext(new Tone.Context({ clockSource: "timeout", latencyHint: "playback", lookAhead: .1, updateInterval: .05 }), true);
       await Tone.start();
-      engine = buildEngine();
-      applyScene(makeScene(), true);
+      const firstScene = makeScene();
+      engine = buildEngine(firstScene);
+      applyScene(firstScene, true);
       running = true;
       schedule();
       document.body.classList.add("started");
